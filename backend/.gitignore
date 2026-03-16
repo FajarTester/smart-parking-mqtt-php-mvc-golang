@@ -1,0 +1,43 @@
+# Environment variable files
+.env
+.env.test
+
+# Go build outputs
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go modules and cache
+/pkg/
+*.mod
+*.sum
+
+# GoLand/IDE files
+.idea/
+*.iml
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Logs
+*.log
+
+# Dependency directories
+vendor/
+
+# Temporary files
+*.tmp
+*.swp
+
+# VS Code
+.vscode/
+
+# Node modules (if any frontend tools)
+node_modules/
+

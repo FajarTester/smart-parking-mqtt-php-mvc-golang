@@ -1,0 +1,188 @@
+# Smart Parkir MQTT MVC (Golang + PHP)
+
+Sistem Smart Parkir ini menggunakan arsitektur hybrid:
+
+- Backend Go sebagai MQTT worker untuk memproses scan RFID masuk/keluar,
+- Frontend PHP MVC untuk dashboard dan API local.
+- Data transaksi tersimpan di database (MySQL untuk frontend, Supabase/Postgres untuk MQTT worker),
+- MQTT sebagai penghubung antara RFID reader, gate, dan LCD.
+
+## Ringkasan Fungsional
+
+1. `RFID entry` diterima oleh Go worker melalui topic MQTT `parking/fajar/entry/rfid`.
+2. Go worker memanggil Supabase REST API untuk `check-in`.
+3. Jika valid, worker publish ke topic servo `parking/fajar/entry/servo` untuk membuka gate.
+4. `RFID exit` diterima pada topic `parking/fajar/exit/rfid` dan worker menghitung biaya lalu update status OUT.
+5. Worker publish balasan ke `parking/fajar/lcd` untuk ditampilkan.
+6. Frontend PHP menyediakan form login dan register, serta API `ParkingController` untuk check-in/out di DB lokal.
+
+## Struktur Proyek
+
+```
+backend/
+  .env
+  cmd/main.go
+  config/config.go
+  mqtt/mqtt_client.go
+  handler/rfid_handler.go
+  service/checkIn.go
+  service/checkOut.go
+  service/parking_service.go
+frontend/
+  index.php
+  controllers/...
+  models/...
+  views/...
+```
+
+## Persyaratan
+
+- Go 1.20+ (atau yang kompatibel)
+- PHP 7.4+ (dengan ekstensi mysqli)
+- MySQL (untuk frontend PHP)
+- Supabase (atau Postgres + REST API) untuk worker Go (jika menggunakan Supabase)
+- Broker MQTT (contoh: Mosquitto)
+
+## Konfigurasi
+
+### 1) Backend Go
+
+1. Masuk direktori backend:
+    ```bash
+    cd backend
+    ```
+2. Siapkan file `.env` (contoh):
+    ```ini
+    SUPABASE_URL=https://your-supabase-url.supabase.co
+    SUPABASE_KEY=your-anon-or-service-key
+    MQTT_BROKER=tcp://localhost:1883
+    MQTT_TOPIC=parking/fajar/#
+    ```
+3. Install dependency Go:
+    ```bash
+    go mod tidy
+    ```
+
+### 2) Frontend PHP
+
+1. Set up XAMPP (Apache + MySQL), letakkan folder `frontend/` di `htdocs`.
+2. Buat database MySQL dan tabel (contoh SQL):
+
+    ```sql
+    CREATE DATABASE smart_parkir;
+    USE smart_parkir;
+
+    CREATE TABLE users (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      username VARCHAR(100) UNIQUE,
+      password VARCHAR(255),
+      role ENUM('owner','petugas') DEFAULT 'petugas'
+    );
+
+    CREATE TABLE parkir (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      card_id VARCHAR(50) NOT NULL,
+      checkin_time DATETIME,
+      checkout_time DATETIME,
+      status ENUM('IN','OUT'),
+      duration INT,
+      fee INT,
+      jenis VARCHAR(30)
+    );
+    ```
+
+3. Edit `frontend/models/Database.php` dengan kredensial DB Anda.
+
+### 3) MQTT broker
+
+Jalankan broker MQTT lokal (contoh Mosquitto):
+
+```bash
+mosquitto -v
+```
+
+## ▶ Cara Menjalankan
+
+### Menjalankan Backend Go MQTT Worker
+
+Dengan `.env` sudah di-set:
+
+```bash
+cd backend
+go run ./cmd
+```
+
+Jika berhasil, akan tampil `Starting MQTT WORKER` dan `MQTT Connected`.
+
+### Menjalankan Frontend PHP
+
+1. Pastikan Apache berjalan di XAMPP.
+2. Akses `http://localhost/frontend/` atau `http://localhost/smart-parkir-mqtt-mvc-golang/frontend/` tergantung path.
+
+## Tes Alur MQTT (Simulasi RFID)
+
+1. Subscribe ke topic debug (opsional):
+    ```bash
+    mosquitto_sub -t "parking/fajar/#" -v
+    ```
+2. Publish payload check-in RFID:
+    ```bash
+    mosquitto_pub -t parking/fajar/entry/rfid -m '{"uid":"1234"}'
+    ```
+3. Publish payload check-out RFID:
+    ```bash
+    mosquitto_pub -t parking/fajar/exit/rfid -m '{"uid":"1234"}'
+    ```
+
+## Detil Kode Penting
+
+### Backend Go
+
+- `cmd/main.go`: bootstrap load config + start MQTT
+- `config/config.go`: load `.env` (SUPABASE_KEY, SUPABASE_URL, MQTT_BROKER, MQTT_TOPIC)
+- `mqtt/mqtt_client.go`: connect broker + subscribe
+- `handler/rfid_handler.go`: switch topic logical
+- `service/checkIn.go`: GET untuk cek sudah IN, POST insert record
+- `service/checkOut.go`: PATCH update OUT + hitung durasi + biaya
+
+### Frontend PHP
+
+- `controllers/ParkingController.php`: checkIn, checkOut, requestCheckout
+- `models/Database.php`: koneksi database
+- `views/`: form login/register dan dashboard
+
+## Catatan Fungsional & Logika
+
+- Logika check-in Go worker menolak jika sudah ada record `status=IN`.
+- Logika check-out: hitung detik -> menit -> jam -> biaya. (Go: ceiling + Rp3000 per jam).
+- PHP front-end memiliki rate `Rp2.000/jam` + tambahan jika lebih dari 10 menit.
+- Worker mem-publish perintah servo gate `OPEN` & `CLOSE`.
+- Worker mem-publish pesan untuk LCD di `parking/fajar/lcd`.
+
+## Keamanan & Produksi
+
+- Jangan simpan `SUPABASE_KEY` service key di repo.
+- Untuk produksi gunakan credentials environment dan HTTPS + TLS MQTT.
+- Tambahkan validasi input API di front-end untuk mencegah SQL injection.
+
+## Pengembangan Lanjutan
+
+1. Integrasi hardware RTC + LCD + servo Fajar.
+2. Buat UI dashboard (grafik transaksi, status gate, total pendapatan).
+3. Tambahkan autentikasi JWT untuk API.
+4. Tambahkan queue dan retry untuk request Supabase di Go worker.
+
+---
+
+## FAQ Cepat
+
+**Q: Kenapa Go worker pakai Supabase?**
+A: Supabase menyediakan endpoint REST untuk tabel `parkir_tb_transaksi`, worker menggunakan GET/POST/PATCH.
+
+**Q: Bagaimana data disinkronkan antara frontend DB dan Supabase?**
+A: Saat ini tidak sinkron otomatis. Kedua sistem berjalan terpisah; penggunaan ideal: pilih satu database untuk alur utama.
+
+**Q: Di mana topik MQTT gate/lcd?**
+A: `parking/fajar/entry/servo`, `parking/fajar/exit/servo`, `parking/fajar/lcd`.
+
+Jika kamu ingin, saya bisa tambahkan contoh `docker-compose` untuk Go worker + Mosquitto + PHP + MySQL agar bisa dijalankan sekali perintah.
