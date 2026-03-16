@@ -3,7 +3,7 @@ class Database {
     private $host = "localhost";
     private $user = "root";
     private $pass = "";
-    private $db = "parkiradit";
+    private $db = "smart_parkir";
     public $conn;
 
     public function __construct() {
